@@ -30,37 +30,164 @@ phase = st.sidebar.radio(
 # PHASE 0: DATA HARMONIZATION
 
 if phase == "Phase 0: Data Harmonization":
-    st.title("⚙️ Phase 0: Data Harmonization")
+    st.title("🧹 Phase 0: Data Harmonization")
     st.markdown(
-        """
-    **The Engine Room:** Ingests raw trip data, standardizes schema variations, 
-    and generates the aggregated datasets.
-    """
+        "Ingest raw CSVs, standardize columns, and **strictly clean** the data."
     )
 
-    pipeline = DataPipeline(raw_dir="data/raw", processed_dir="data/processed")
-
-    tab1, tab2, tab3 = st.tabs(
-        ["📈 System Diagnostics", "📊 Ridership Analytics", "🌍 Geographic Insights"]
+    # Initialize Pipeline
+    pipeline = DataPipeline(
+        raw_dir=r"E:\nyc-bike-analysis\data\raw", processed_dir="data/processed"
     )
 
-    with tab1:
-        st.subheader("System Diagnostics")
-        st.markdown(
-            "*High-level health check: Is the system growing? When do people ride?*"
+    # --- PART 1: DATA HYGIENE SCANNER ---
+    st.subheader("1. Data Hygiene Check")
+
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        # Unique KEY used here to prevent crash
+        scan_btn = st.button(
+            "🔍 Scan Files",
+            type="primary",
+            use_container_width=True,
+            key="scan_files_btn_p0",
         )
-        fig_diag = pipeline.get_diagnostics_dashboard()
-        if fig_diag:
-            st.plotly_chart(fig_diag, use_container_width=True)
-            st.info(
-                """
+
+    if scan_btn or st.session_state.get("scan_done"):
+        st.session_state["scan_done"] = True
+
+        with st.spinner("Scanning files for missing values..."):
+            health_df = pipeline.scan_data_health()
+
+        if not health_df.empty:
+            # Metrics Calculation
+            total_raw_rows = health_df["Total Rows"].sum()
+            total_dirty_rows = health_df["Dirty Rows"].sum()
+            drop_percentage = (
+                (total_dirty_rows / total_raw_rows) * 100 if total_raw_rows > 0 else 0
+            )
+
+            # 1. METRICS ROW
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Rows (Raw)", f"{total_raw_rows:,.0f}")
+            m2.metric(
+                "Rows to Keep",
+                f"{total_raw_rows - total_dirty_rows:,.0f}",
+                help="Rows with 100% complete data.",
+            )
+            m3.metric(
+                "Rows to Drop",
+                f"{total_dirty_rows:,.0f}",
+                delta="-Dirty",
+                delta_color="inverse",
+                help="Rows with at least one missing value.",
+            )
+            m4.metric("Data Loss %", f"{drop_percentage:.2f}%", delta_color="inverse")
+
+            # Show Per-File Breakdown
+            with st.expander(
+                "📄 View Per-File Breakdown (Click to Expand)", expanded=True
+            ):
+                st.dataframe(health_df, use_container_width=True)
+
+            st.divider()
+
+            # 2. VISUALIZATION OF ERRORS
+            st.subheader("2. Where is the data missing?")
+
+            melt_cols = [c for c in health_df.columns if "Missing" in c]
+            if melt_cols:
+                melted = health_df.melt(
+                    id_vars=["File Name"],
+                    value_vars=melt_cols,
+                    var_name="Column",
+                    value_name="Count",
+                )
+                melted["Column"] = melted["Column"].str.replace("Missing ", "")
+                melted = melted[melted["Count"] > 0]
+
+                if not melted.empty:
+                    fig = px.bar(
+                        melted,
+                        x="File Name",
+                        y="Count",
+                        color="Column",
+                        title="Missing Values Distribution",
+                        height=400,
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.success("🎉 No missing values found in specific columns!")
+
+            # 3. ACTION BUTTON
+            st.divider()
+            st.subheader("3. Execute Cleaning")
+
+            if total_dirty_rows == 0:
+                st.success("✅ Data is pristine. Ready to process.")
+                btn_label = "🚀 Run Pipeline (No Drops)"
+            else:
+                st.warning(
+                    f"⚠️ You are about to drop {total_dirty_rows:,.0f} rows ({drop_percentage:.2f}% of data)."
+                )
+                btn_label = f"🗑️ Drop {total_dirty_rows:,.0f} Rows & Run Pipeline"
+
+            # Unique KEY used here to prevent crash
+            if st.button(btn_label, type="primary", key="run_pipeline_btn_p0"):
+                progress = st.progress(0)
+
+                st.write("1️⃣ Aggregating Ridership...")
+                res_agg = pipeline.run_aggregation_pipeline()
+                progress.progress(33)
+
+                st.write("2️⃣ Calculating Traffic Flow...")
+                res_flow = pipeline.run_flow_pipeline()
+                progress.progress(66)
+
+                st.write("3️⃣ Mapping Stations...")
+                res_geo = pipeline.run_geographic_pipeline()
+                progress.progress(100)
+
+                if res_agg["status"] == "SUCCESS" and res_flow["status"] == "SUCCESS":
+                    st.session_state["processing_done"] = True
+                    st.success("✅ Cleaning & Processing Complete!")
+                    st.rerun()
+                else:
+                    st.error("❌ Something went wrong during processing.")
+
+    # --- PART 4: DASHBOARDS ---
+    if st.session_state.get("processing_done") or (
+        Path("data/processed/final_aggregated_rides.csv").exists()
+    ):
+        st.divider()
+        st.subheader("4. Analytical Dashboards")
+
+        subtab1, subtab2, subtab3 = st.tabs(
+            [
+                "📈 Diagnostics (Trends)",
+                "📊 Comprehensive (Stats)",
+                "🌍 Geographic (Map)",
+            ]
+        )
+
+        # 1. Diagnostics Tab
+        with subtab1:
+            st.subheader("System Diagnostics")
+            st.markdown(
+                "*High-level health check: Is the system growing? When do people ride?*"
+            )
+            fig_diag = pipeline.get_diagnostics_dashboard()
+            if fig_diag:
+                st.plotly_chart(fig_diag, use_container_width=True)
+                st.info(
+                    """
             **Reading the Charts:**
             * **Top Chart (The Pulse):** Shows the 7-day rolling average. Note the gap between Summer peaks and Winter troughs.
             * **Bottom Chart (The Heartbeat):** Shows average activity per hour. Note the "Twin Peaks" (Morning/Evening Rush).
             """
-            )
-            st.markdown(
-                """
+                )
+                st.markdown(
+                    """
                 # 📉 Conclusion: Temporal Constraints for Optimization
 
                 ### 1. The Volatility Gap
@@ -74,107 +201,88 @@ if phase == "Phase 0: Data Harmonization":
 
                 **Next Step:** Use these demand curves to calculate the precise "Safe Stock" required at each station at 05:00 AM.
                 """
-            )
-        else:
-            st.warning("⚠️ No data found. Please run 'Engine 1: Aggregator' below.")
+                )
+            else:
+                st.warning("⚠️ No data found. Please run the pipeline above.")
 
-    with tab2:
-        st.subheader("Comprehensive Analytics")
-        st.markdown(
-            """
-            # Seasonal Dynamics & Product Adoption
-
-            **Objective:** Evaluate the long-term structural shifts in the Manhattan network. While Phase 2b focused on operational hours, this analysis quantifies Year-Over-Year (YoY) growth, user retention, and fleet utilization trends.
-
-            ### Analysis Scope
-            1.  **Ridership Composition:** Analyze the ratio of Members vs. Casual riders to assess the stability of the recurring revenue base.
-            2.  **YoY Growth:** Compare 2023, 2024, and 2025 seasonal curves to validate system expansion.
-            3.  **Product Shift:** Quantify the adoption rate of Electric Bikes vs. Classic Bikes to inform future fleet procurement strategies.
-
-            ### Key Deliverables
-            * **Seasonal Dashboard:** A composite visualization of monthly ridership, growth vectors, and fleet preference.
-            """
-        )
-        fig_main = pipeline.get_comprehensive_dashboard()
-        if fig_main:
-            st.plotly_chart(fig_main, use_container_width=True)
+        # 2. Comprehensive Tab
+        with subtab2:
+            st.subheader("Comprehensive Analytics")
             st.markdown(
                 """
-                # 📉 Strategic Insights
+                # Seasonal Dynamics & Product Adoption
 
-                ### 1. The "Base Load" Stability
-                **Chart 1** reveals that **Members** (Blue) form the resilient core of the system, maintaining usage even during winter months. **Casual** riders (Gray) are highly elastic, appearing only during peak season (May–Oct).
-                * **Implication:** Optimization efforts (Phase 3) should prioritize Member reliability, as they are the year-round revenue engine.
+                **Objective:** Evaluate the long-term structural shifts in the Manhattan network. While Phase 2b focused on operational hours, this analysis quantifies Year-Over-Year (YoY) growth, user retention, and fleet utilization trends.
 
-                ### 2. Growth Validation
-                **Chart 2** confirms a consistent upward trajectory. The 2025 curve (Yellow/Green) sits structurally higher than 2023 (Purple), indicating genuine network adoption rather than just post-pandemic recovery.
+                ### Analysis Scope
+                1.  **Ridership Composition:** Analyze the ratio of Members vs. Casual riders to assess the stability of the recurring revenue base.
+                2.  **YoY Growth:** Compare 2023, 2024, and 2025 seasonal curves to validate system expansion.
+                3.  **Product Shift:** Quantify the adoption rate of Electric Bikes vs. Classic Bikes to inform future fleet procurement strategies.
 
-                ### 3. The E-Bike Revolution
-                **Chart 3** highlights a critical operational challenge. If the Dark Blue area (E-Bikes) is expanding relative to Light Blue (Classic), it means the system requires **more battery swapping operations** and potentially **electrified docks**, rather than just static rebalancing vans.
-                                """
+                ### Key Deliverables
+                * **Seasonal Dashboard:** A composite visualization of monthly ridership, growth vectors, and fleet preference.
+                """
             )
-        else:
-            st.info("⚠️ Data missing. Run 'Engine 1' below.")
+            fig_main = pipeline.get_comprehensive_dashboard()
+            if fig_main:
+                st.plotly_chart(fig_main, use_container_width=True)
+                st.markdown(
+                    """
+                    # 📉 Strategic Insights
 
-    with tab3:
-        st.subheader("Geographic Insights")
-        st.markdown(
-            """
-           # Geographic Distribution & Infrastructure
+                    ### 1. The "Base Load" Stability
+                    **Chart 1** reveals that **Members** (Blue) form the resilient core of the system, maintaining usage even during winter months. **Casual** riders (Gray) are highly elastic, appearing only during peak season (May–Oct).
+                    * **Implication:** Optimization efforts (Phase 3) should prioritize Member reliability, as they are the year-round revenue engine.
 
-            **Objective:** Validate the assumption that Manhattan is the primary driver of system load. This analysis physically maps every station to its NYC borough and compares ridership volumes across territories to confirm where optimization efforts should be concentrated.
+                    ### 2. Growth Validation
+                    **Chart 2** confirms a consistent upward trajectory. The 2025 curve (Yellow/Green) sits structurally higher than 2023 (Purple), indicating genuine network adoption rather than just post-pandemic recovery.
 
-            ### Analysis Scope
-            1.  **Station Mapping:** Perform a spatial join between station GPS coordinates and NYC Borough boundaries (GeoJSON).
-            2.  **Borough Comparison:** Quantify the ridership magnitude of Manhattan relative to Brooklyn, Queens, and the Bronx.
-            3.  **Infrastructure Visualization:** Map the active station network to visualize density hotspots.
+                    ### 3. The E-Bike Revolution
+                    **Chart 3** highlights a critical operational challenge. If the Dark Blue area (E-Bikes) is expanding relative to Light Blue (Classic), it means the system requires **more battery swapping operations** and potentially **electrified docks**, rather than just static rebalancing vans.
+                                    """
+                )
+            else:
+                st.info("⚠️ Data missing. Run the pipeline above.")
 
-            ### Key Deliverables
-            * **Station-to-Borough Master List:** A CSV mapping every Station ID to its Borough.
-            * **Borough Trends Dashboard:** A composite view of infrastructure density and ridership growth by territory.
-        """
-        )
-        fig_geo = pipeline.get_geographic_dashboard()
-        if fig_geo:
-            st.plotly_chart(fig_geo, use_container_width=True)
+        # 3. Geographic Tab
+        with subtab3:
+            st.subheader("Geographic Insights")
             st.markdown(
                 """
-                # 🌍 Geographic Insights
+                # Geographic Distribution & Infrastructure
 
-                ### 1. Manhattan Dominance
-                The charts confirm that **Manhattan (Blue)** is operating at a completely different order of magnitude compared to Brooklyn or Queens. While Brooklyn has significant *infrastructure* (orange dots on the map), the *ridership intensity* (line charts) in Manhattan is 5x-10x higher.
+                **Objective:** Validate the assumption that Manhattan is the primary driver of system load. This analysis physically maps every station to its NYC borough and compares ridership volumes across territories to confirm where optimization efforts should be concentrated.
 
-                ### 2. The Optimization Target
-                This validates our decision to focus the **Phase 3 Optimization** model exclusively on Manhattan.
-                * **Problem:** Manhattan's density creates the "Tidal Wave" effect (cascading failure).
-                * **Opportunity:** The high station density (seen in the map) allows for efficient rebalancing loops that wouldn't be profitable in the sparser networks of Queens or the Bronx.
-            """
+                ### Analysis Scope
+                1.  **Station Mapping:** Perform a spatial join between station GPS coordinates and NYC Borough boundaries (GeoJSON).
+                2.  **Borough Comparison:** Quantify the ridership magnitude of Manhattan relative to Brooklyn, Queens, and the Bronx.
+                3.  **Infrastructure Visualization:** Map the active station network to visualize density hotspots.
+
+                ### Key Deliverables
+                * **Station-to-Borough Master List:** A CSV mapping every Station ID to its Borough.
+                * **Borough Trends Dashboard:** A composite view of infrastructure density and ridership growth by territory.
+                """
             )
-        else:
-            st.info("⚠️ Map data missing. Please run 'Engine 3: Geography' below.")
+            fig_geo = pipeline.get_geographic_dashboard()
+            if fig_geo:
+                st.plotly_chart(fig_geo, use_container_width=True)
+                st.markdown(
+                    """
+                                # 🌍 Geographic Insights
 
-    st.divider()
-    with st.expander("🛠️ Pipeline Management (Run Engines)"):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Run Aggregator"):
-                with st.spinner("Processing..."):
-                    pipeline.run_aggregation_pipeline()
-                    st.rerun()
-        with c2:
-            if st.button("Run Flow Mapper"):
-                with st.spinner("Processing..."):
-                    pipeline.run_flow_pipeline()
-                    st.rerun()
-        with c3:
-            if st.button("Run Geo Mapper"):
-                with st.spinner("Mapping Coordinates..."):
-                    status = pipeline.run_geographic_pipeline()
-                    if status == "MISSING_GEOJSON":
-                        st.error("❌ Missing 'new-york-city-boroughs.geojson'")
-                    else:
-                        st.success("✅ Done!")
-                        st.rerun()
+                                ### 1. Manhattan Dominance
+                                The charts confirm that **Manhattan (Blue)** is operating at a completely different order of magnitude compared to Brooklyn or Queens. While Brooklyn has significant *infrastructure* (orange dots on the map), the *ridership intensity* (line charts) in Manhattan is 5x-10x higher.
+
+                                ### 2. The Optimization Target
+                                This validates our decision to focus the **Phase 3 Optimization** model exclusively on Manhattan.
+                                * **Problem:** Manhattan's density creates the "Tidal Wave" effect (cascading failure).
+                                * **Opportunity:** The high station density (seen in the map) allows for efficient rebalancing loops that wouldn't be profitable in the sparser networks of Queens or the Bronx.
+                            """
+                )
+            else:
+                st.info("⚠️ Map data missing. Run the pipeline above.")
+
+# PHASE 1: NETWORK DIAGNOSTICS (ADDED)
 
 # PHASE 1: NETWORK DIAGNOSTICS (ADDED)
 
